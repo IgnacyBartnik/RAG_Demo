@@ -2,6 +2,8 @@ import ollama
 import numpy as np
 import tqdm
 from sklearn.metrics.pairwise import cosine_similarity
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
 
 
 
@@ -25,6 +27,18 @@ def retrieve(query, EMBEDDING_MODEL, VECTOR_DB, top_n=3):
     # Sort the similarities in descending order
     similarities.sort(key=lambda x: x[1], reverse=True)
     return similarities[:top_n]
+
+
+
+def rerank(query, retrieved_chunks, top_k=3, model_name='cross-encoder/ms-marco-MiniLM-L-6-v2'):
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    pairs = [(query, chunk) for chunk, _ in retrieved_chunks]
+    inputs = tokenizer.batch_encode_plus(pairs, padding=True, truncation=True, return_tensors='pt')
+    with torch.no_grad():
+        scores = model(**inputs).logits.squeeze(-1).tolist()
+    reranked = sorted(zip([chunk for chunk, _ in retrieved_chunks], scores), key=lambda x: x[1], reverse=True)
+    return reranked[:top_k]
 
 
 
@@ -66,31 +80,30 @@ def main():
     # Chatbot
 
     input_query = input('Ask me a question: ')
-    retrieved_knowledge = retrieve(input_query, EMBEDDING_MODEL, VECTOR_DB)
 
-    print('Retrieved knowledge:')
-    for chunk, similarity in retrieved_knowledge:
-        print(f' - (similarity: {similarity:.2f}) {chunk}')
+    retrieved_knowledge = retrieve(input_query, EMBEDDING_MODEL, VECTOR_DB)
+    reranked_knowledge = rerank(input_query, retrieved_knowledge)
+
+    print('Reranked knowledge:')
+    for chunk, score in reranked_knowledge:
+        print(f' - (score: {score:.2f}) {chunk}')
 
     instruction_prompt = (
         "You are a helpful chatbot.\n"
         "Use only the following pieces of context to answer the question. "
         "Don't make up any new information:\n"
-        + "\n".join([f' - {chunk}' for chunk, _ in retrieved_knowledge])
+        + "\n".join([f' - {chunk}' for chunk, _ in reranked_knowledge])
     )
-    # print(instruction_prompt)
 
     stream = ollama.chat(
-    model=LANGUAGE_MODEL,
-    messages=[
-        {'role': 'system', 'content': instruction_prompt},
-        {'role': 'user', 'content': input_query},
-    ],
-    stream=True,
+        model=LANGUAGE_MODEL,
+        messages=[
+            {'role': 'system', 'content': instruction_prompt},
+            {'role': 'user', 'content': input_query},
+        ],
+        stream=True,
     )
 
-    # print the response from the chatbot in real-time
-    # print('Chatbot response:')
     for chunk in stream:
         print(chunk['message']['content'], end='', flush=True)
 
