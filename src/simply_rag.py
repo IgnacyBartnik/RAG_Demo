@@ -6,11 +6,6 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 
 
-
-def add_chunk_to_database(chunk, VECTOR_DB, EMBEDDING_MODEL):
-  embedding = ollama.embed(model=EMBEDDING_MODEL, input=chunk)['embeddings'][0]
-  VECTOR_DB.append((chunk, embedding))
-
 def cosine_sim_sklearn_vecs(a, b):
     """
     Calculate cosine similarity between two vectors using sklearn.
@@ -19,7 +14,13 @@ def cosine_sim_sklearn_vecs(a, b):
     b = np.array(b).reshape(1, -1)
     return cosine_similarity(a, b)[0, 0]
 
-def retrieve(query, EMBEDDING_MODEL, VECTOR_DB, top_n=3):
+
+def add_chunk_to_database(chunk, VECTOR_DB, EMBEDDING_MODEL):
+  embedding = ollama.embed(model=EMBEDDING_MODEL, input=chunk)['embeddings'][0]
+  VECTOR_DB.append((chunk, embedding))
+
+
+def retrieve(query, VECTOR_DB, EMBEDDING_MODEL, top_n=5):
     # Calculate the embedding for the query
     query_emb = ollama.embed(model=EMBEDDING_MODEL, input=query)['embeddings'][0]
     # Calculate cosine similarity for each chunk in the vector database
@@ -30,7 +31,7 @@ def retrieve(query, EMBEDDING_MODEL, VECTOR_DB, top_n=3):
 
 
 
-def rerank(query, retrieved_chunks, top_k=3, model_name='cross-encoder/ms-marco-MiniLM-L-6-v2'):
+def rerank(query, retrieved_chunks, top_k=3, model_name='cross-encoder/ms-marco-MiniLM-L-12-v2'):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForSequenceClassification.from_pretrained(model_name)
     pairs = [(query, chunk) for chunk, _ in retrieved_chunks]
@@ -47,7 +48,7 @@ def main():
     LANGUAGE_MODEL = 'hf.co/bartowski/Llama-3.2-1B-Instruct-GGUF'
 
     dataset = []
-    with open('cat-facts.txt', 'r') as file:
+    with open('../cat-facts.txt', 'r') as file:
         dataset = file.readlines()
     print(f'Loaded {len(dataset)} entries')
 
@@ -55,7 +56,7 @@ def main():
     VECTOR_DB = []
     # Let us check if the vectorization has already been done
     try:
-        with open('vector_db.txt', 'r') as file:
+        with open('../vector_db.txt', 'r') as file:
             for line in file:
                 chunk, embedding_str = line.strip().split('\t')
                 embedding = list(map(float, embedding_str.split(',')))
@@ -63,7 +64,7 @@ def main():
         print(f'Loaded {len(VECTOR_DB)} entries from vector_db.txt')
         vectorized_dataset_loaded = True
     except FileNotFoundError:
-        print('vector_db.txt not found, proceeding to vectorize the dataset')
+        print('../vector_db.txt not found, proceeding to vectorize the dataset')
         for i, chunk in tqdm(enumerate(dataset), total=len(dataset), desc="Adding chunks"):
             add_chunk_to_database(chunk, VECTOR_DB, EMBEDDING_MODEL)
         vectorized_dataset_loaded = False
@@ -81,10 +82,10 @@ def main():
 
     input_query = input('Ask me a question: ')
 
-    retrieved_knowledge = retrieve(input_query, EMBEDDING_MODEL, VECTOR_DB)
+    retrieved_knowledge = retrieve(input_query, VECTOR_DB, EMBEDDING_MODEL)
     reranked_knowledge = rerank(input_query, retrieved_knowledge)
 
-    print('Reranked knowledge:')
+    print('\nReranked knowledge:')
     for chunk, score in reranked_knowledge:
         print(f' - (score: {score:.2f}) {chunk}')
 
@@ -104,6 +105,7 @@ def main():
         stream=True,
     )
 
+    print('\n\nChatbot response:\n')
     for chunk in stream:
         print(chunk['message']['content'], end='', flush=True)
 
